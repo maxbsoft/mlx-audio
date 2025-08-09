@@ -2,7 +2,8 @@ import argparse
 import os
 import random
 import sys
-from typing import Optional, Tuple
+import time
+from typing import Optional, Tuple, Generator, Callable
 
 import mlx.core as mx
 import numpy as np
@@ -355,6 +356,201 @@ def generate_audio(
         traceback.print_exc()
 
 
+def generate_audio_streaming(
+    text: str,
+    model_path: str = "mlx-community/orpheus-3b-0.1-ft-4bit",
+    model=None,  # Optional pre-loaded model to avoid reloading
+    voice: str = "af_heart", 
+    temperature: float = 0.6,
+    top_p: float = 0.8,
+    max_tokens: int = 1200,
+    streaming_chunk_tokens: int = 21,  # 3 audio frames
+    ultra_low_latency: bool = True,  # Enable ultra-low latency (~0.27s vs ~2.8s)
+    verbose: bool = True,
+    ref_audio: Optional[str] = None,
+    ref_text: Optional[str] = None,
+    **kwargs,
+) -> Generator[np.ndarray, None, None]:
+    """
+    Generate audio with real streaming for Orpheus models
+    
+    Args:
+        text: Text to synthesize
+        model_path: Path to the TTS model (used if model=None)
+        model: Optional pre-loaded model (avoids ~6s loading time)
+        voice: Voice to use
+        temperature: Generation temperature
+        top_p: Top-p sampling parameter
+        max_tokens: Maximum tokens to generate
+        streaming_chunk_tokens: Tokens per chunk (must be multiple of 7)
+        ultra_low_latency: Use ultra-low latency mode (~0.27s vs ~2.8s first chunk)
+        verbose: Print progress information
+        ref_audio: Path to reference audio for voice cloning
+        ref_text: Text for reference audio
+        **kwargs: Additional model parameters
+        
+    Yields:
+        np.ndarray: Audio chunks as they are generated
+    """
+    
+    try:
+        # Check if model is Orpheus-compatible
+        if "orpheus" not in model_path.lower() and "llama" not in model_path.lower():
+            print(f"Warning: Model {model_path} may not support streaming. "
+                  f"Consider using 'mlx-community/orpheus-3b-0.1-ft-4bit'")
+        
+        # Load or reuse model
+        if model is None:
+            # Load model if not provided
+            from .utils import load_model as base_load_model
+            model = base_load_model(model_path=model_path)
+            if verbose:
+                print(f"📦 Model loaded from: {model_path}")
+        else:
+            # Use provided model
+            if verbose:
+                print(f"🔄 Using pre-loaded model")
+        
+        # Load reference audio if provided
+        ref_audio_mx = None
+        if ref_audio:
+            if not os.path.exists(ref_audio):
+                raise FileNotFoundError(f"Reference audio file not found: {ref_audio}")
+            
+            ref_audio_mx = load_audio(ref_audio, sample_rate=model.sample_rate)
+            
+            if not ref_text:
+                print("Ref_text not found. Transcribing ref_audio...")
+                from mlx_audio.stt.models.whisper import Model as Whisper
+                
+                stt_model = Whisper.from_pretrained(path_or_hf_repo="mlx-community/whisper-large-v3-turbo")
+                ref_text = stt_model.generate(ref_audio_mx).text
+                print(f"Ref_text: {ref_text}")
+                
+                # Clear memory
+                del stt_model
+                mx.clear_cache()
+        
+        if verbose:
+            print(f"\n🎵 Orpheus Streaming TTS")
+            print(f"📝 Text: {text}")
+            print(f"🎤 Voice: {voice}")
+            print(f"📊 Chunk size: {streaming_chunk_tokens} tokens")
+            print(f"🌡️  Temperature: {temperature}")
+            print(f"🎯 Model: {model_path}")
+        
+        # Choose streaming approach based on latency requirements
+        if ultra_low_latency:
+            if verbose:
+                print("🚀 Using ultra-low latency mode (~0.27s first chunk)")
+            from .ultra_low_latency_streaming import generate_ultra_low_latency_streaming
+            
+            for audio_chunk in generate_ultra_low_latency_streaming(
+                model=model,
+                text=text,
+                voice=voice,
+                temperature=temperature,
+                top_p=top_p,
+                max_tokens=max_tokens,
+                min_tokens_for_first_chunk=7,  # Aggressive first chunk
+                subsequent_chunk_tokens=streaming_chunk_tokens,
+                verbose=verbose,
+                ref_audio=ref_audio_mx,
+                ref_text=ref_text,
+                **kwargs
+            ):
+                yield audio_chunk
+        else:
+            if verbose:
+                print("📊 Using standard streaming mode (~2.8s first chunk)")
+            from .orpheus_streaming import generate_audio_streaming_simple
+            
+            for audio_chunk in generate_audio_streaming_simple(
+                model=model,
+                text=text,
+                voice=voice,
+                temperature=temperature,
+                top_p=top_p,
+                max_tokens=max_tokens,
+                streaming_chunk_tokens=streaming_chunk_tokens,
+                verbose=verbose,
+                ref_audio=ref_audio_mx,
+                ref_text=ref_text,
+                **kwargs
+            ):
+                yield audio_chunk
+                
+    except Exception as e:
+        print(f"❌ Streaming error: {e}")
+        import traceback
+        traceback.print_exc()
+
+
+def generate_audio_with_callback(
+    text: str,
+    callback: Callable[[np.ndarray, dict], None],
+    model_path: str = "mlx-community/orpheus-3b-0.1-ft-4bit",
+    output_chunk_duration_ms: int = 100,
+    ultra_low_latency: bool = True,
+    **kwargs
+) -> None:
+    """
+    Generate audio with callback function for each chunk
+    
+    Args:
+        text: Text to synthesize
+        callback: Function called with (audio_chunk, metadata) for each chunk
+        model_path: Path to TTS model
+        output_chunk_duration_ms: Duration of output chunks in milliseconds
+        ultra_low_latency: Use ultra-low latency mode (~0.27s vs ~2.8s first chunk)
+        **kwargs: Additional TTS parameters
+    """
+    
+    from .streaming_buffer import create_streaming_session, AudioStreamCallback
+    
+    # Create callback manager
+    def on_chunk(chunk: np.ndarray, metadata: dict):
+        callback(chunk, metadata)
+    
+    def on_start():
+        print("🎵 Starting audio generation...")
+    
+    def on_complete():
+        print("✅ Audio generation completed!")
+    
+    def on_error(error: Exception):
+        print(f"❌ Error during generation: {error}")
+    
+    callback_manager = AudioStreamCallback(
+        on_chunk=on_chunk,
+        on_start=on_start,
+        on_complete=on_complete,
+        on_error=on_error
+    )
+    
+    # Create streaming session
+    buffer = create_streaming_session(
+        text=text,
+        model_path=model_path,
+        output_chunk_duration_ms=output_chunk_duration_ms,
+        callback=callback_manager,
+        ultra_low_latency=ultra_low_latency,
+        **kwargs
+    )
+    
+    # Wait for completion with timeout protection
+    max_wait_time = 120  # 2 minutes timeout
+    wait_start = time.time()
+    
+    while buffer.is_active():
+        if time.time() - wait_start > max_wait_time:
+            print("⚠️  Timeout waiting for audio generation to complete")
+            break
+        time.sleep(0.01)
+    
+    callback_manager.complete()
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Generate audio from text using TTS.")
     parser.add_argument(
@@ -427,6 +623,28 @@ def parse_args():
         default=2.0,
         help="The time interval in seconds for streaming segments",
     )
+    parser.add_argument(
+        "--streaming_chunk_tokens",
+        type=int,
+        default=21,
+        help="Number of tokens per streaming chunk (for Orpheus models, must be multiple of 7)",
+    )
+    parser.add_argument(
+        "--real_streaming",
+        action="store_true",
+        help="Use real chunked streaming (Orpheus models only)",
+    )
+    parser.add_argument(
+        "--ultra_low_latency",
+        action="store_true",
+        default=True,
+        help="Use ultra-low latency mode (~0.27s vs ~2.8s first chunk, default: True)",
+    )
+    parser.add_argument(
+        "--standard_latency",
+        action="store_true",
+        help="Use standard latency mode (disables ultra-low latency)",
+    )
 
     args = parser.parse_args()
 
@@ -442,7 +660,36 @@ def parse_args():
 
 def main():
     args = parse_args()
-    generate_audio(model_path=args.model, **vars(args))
+    
+    # Determine latency mode
+    ultra_low_latency = args.ultra_low_latency and not args.standard_latency
+    
+    if args.real_streaming:
+        # Use real streaming for Orpheus models
+        latency_mode = "ultra-low (~0.27s)" if ultra_low_latency else "standard (~2.8s)"
+        print(f"🚀 Starting real streaming mode with {latency_mode} latency...")
+        
+        def audio_callback(chunk: np.ndarray, metadata: dict):
+            print(f"🔊 Received chunk {metadata['chunk_index']}: {len(chunk)} samples")
+            # Here you could send to audio device, websocket, etc.
+        
+        generate_audio_with_callback(
+            text=args.text,
+            callback=audio_callback,
+            model_path=args.model,
+            voice=args.voice,
+            temperature=args.temperature,
+            top_p=args.top_p,
+            max_tokens=args.max_tokens,
+            streaming_chunk_tokens=args.streaming_chunk_tokens,
+            ultra_low_latency=ultra_low_latency,  # Pass the latency mode
+            verbose=args.verbose,
+            ref_audio=args.ref_audio,
+            ref_text=args.ref_text,
+        )
+    else:
+        # Use original generate_audio function
+        generate_audio(model_path=args.model, **vars(args))
 
 
 if __name__ == "__main__":

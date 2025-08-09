@@ -1,6 +1,28 @@
 # MLX-Audio
 
-A text-to-speech (TTS) and Speech-to-Speech (STS) library built on Apple's MLX framework, providing efficient speech synthesis on Apple Silicon.
+A text-to-speech (TTS) and Speech-to-Speech (STS) library built on Apple's MLX framework, providing efficient speech synthesis on Apple Silicon with streaming capabilities.
+
+## Table of Contents
+
+- [Features](#features)
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [Real-Time Streaming TTS](#real-time-streaming-tts)
+  - [Streaming Features](#streaming-features)
+  - [Basic Streaming Example](#basic-streaming-example)
+  - [Callback-Based Streaming](#callback-based-streaming)
+  - [WebSocket Streaming Server](#websocket-streaming-server)
+  - [Streaming Parameters](#streaming-parameters)
+  - [Audio Quality Modes](#audio-quality-modes)
+  - [Quality Comparison Tool](#quality-comparison-tool)
+  - [Known Quality Considerations](#known-quality-considerations)
+  - [Best Practices](#best-practices)
+- [Web Interface & API Server](#web-interface--api-server)
+- [Models](#models)
+- [Advanced Features](#advanced-features)
+- [Requirements](#requirements)
+- [License](#license)
+- [Acknowledgements](#acknowledgements)
 
 ## Features
 
@@ -8,6 +30,7 @@ A text-to-speech (TTS) and Speech-to-Speech (STS) library built on Apple's MLX f
 - Multiple language support
 - Voice customization options
 - Adjustable speech speed control (0.5x to 2.0x)
+- **WebSocket streaming server**
 - Interactive web interface with 3D audio visualization
 - REST API for TTS generation
 - Quantization support for optimized performance
@@ -36,6 +59,9 @@ mlx_audio.tts.generate --text "Hello, world" --file_prefix hello
 
 # Adjust speaking speed (0.5-2.0)
 mlx_audio.tts.generate --text "Hello, world" --speed 1.4
+
+# Real-time streaming TTS (see Streaming section for details)
+mlx_audio.tts.generate --text "Hello, streaming world" --real_streaming --ultra_low_latency
 ```
 
 ### How to call from python
@@ -64,7 +90,233 @@ print("Audiobook chapter successfully generated!")
 
 ```
 
-### Web Interface & API Server
+## Real-Time Streaming TTS
+
+MLX-Audio supports real-time streaming TTS for applications requiring low-latency audio generation, such as conversational AI, live broadcasts, and interactive voice applications.
+
+### Streaming Features
+
+- **Ultra-low latency**: First audio chunk in ~0.25s vs ~6s for traditional generation
+- **Real-time processing**: Audio streams as chunks without waiting for complete generation
+- **Memory efficient**: No accumulation of large audio buffers
+- **WebSocket support**: Perfect for real-time web applications
+- **Configurable chunk sizes**: Control latency vs quality trade-offs
+- **Two quality modes**: Clean (identical to normal generation) vs Processed (smoother transitions)
+
+### Basic Streaming Example
+
+```python
+from mlx_audio.tts.generate import generate_audio_streaming
+
+# Stream audio in real-time
+for audio_chunk in generate_audio_streaming(
+    text="Hello, this is streaming TTS with ultra-low latency!",
+    model_path="mlx-community/orpheus-3b-0.1-ft-4bit",
+    voice="af_heart",
+    streaming_chunk_tokens=35,  # ~150ms audio chunks
+    temperature=0.6,
+    ultra_low_latency=True  # Enable aggressive first chunk
+):
+    # Process each chunk as it arrives
+    # - Send to audio device for immediate playback
+    # - Stream over network via WebSocket
+    # - Buffer for smooth playback
+    print(f"Received chunk: {len(audio_chunk)} samples")
+```
+
+### Callback-Based Streaming
+
+```python
+from mlx_audio.tts.generate import generate_audio_with_callback
+
+def audio_callback(chunk, metadata):
+    """Called for each audio chunk"""
+    print(f"Chunk {metadata['chunk_index']}: {len(chunk)} samples")
+    # Send to audio device, WebSocket, etc.
+
+generate_audio_with_callback(
+    text="Your text here",
+    callback=audio_callback,
+    model_path="mlx-community/orpheus-3b-0.1-ft-4bit",
+    voice="af_heart",
+    streaming_chunk_tokens=35,
+    output_chunk_duration_ms=150,  # Target chunk duration
+    ultra_low_latency=True
+)
+```
+
+### WebSocket Streaming Server
+
+MLX-Audio includes a WebSocket server for real-time streaming applications:
+
+```bash
+# Start the streaming server
+python -m mlx_audio.orpheus_streaming_server --host 0.0.0.0 --port 8765
+
+# Or with custom settings
+python -m mlx_audio.orpheus_streaming_server \
+    --host 127.0.0.1 \
+    --port 8765 \
+    --model mlx-community/orpheus-3b-0.1-ft-4bit \
+    --chunk_tokens 35
+```
+
+#### WebSocket Client Example
+
+```javascript
+const ws = new WebSocket('ws://localhost:8765');
+
+ws.onopen = function() {
+    // Send text for streaming
+    ws.send(JSON.stringify({
+        text: "Hello, this is real-time streaming TTS!",
+        voice: "af_heart",
+        temperature: 0.6,
+        chunk_tokens: 35
+    }));
+};
+
+ws.onmessage = function(event) {
+    const data = JSON.parse(event.data);
+    if (data.type === 'audio_chunk') {
+        // Received audio chunk as base64
+        const audioBuffer = base64ToArrayBuffer(data.audio);
+        // Play audio immediately
+        playAudioChunk(audioBuffer);
+    }
+};
+```
+
+### Streaming Parameters
+
+| Parameter | Description | Default | Impact |
+|-----------|-------------|---------|---------|
+| `streaming_chunk_tokens` | Tokens per chunk (must be multiple of 7) | 21 | Smaller = lower latency, more chunks |
+| `ultra_low_latency` | Aggressive first chunk generation | True | Reduces first chunk time to ~0.25s |
+| `temperature` | Generation randomness | 0.6 | Higher = more variation |
+| `output_chunk_duration_ms` | Target output chunk duration | 150ms | Controls buffering behavior |
+| `respect_source_boundaries` | Preserve model chunk boundaries | False | Reduces audio artifacts |
+
+### Audio Quality Modes
+
+#### Clean Mode (Recommended for Quality)
+```python
+# Generate without audio processing (identical to normal generation)
+for chunk in generate_audio_streaming(text, ...):
+    chunks.append(chunk.astype(np.float32))
+total_audio = np.concatenate(chunks)  # Simple concatenation
+```
+
+#### Processed Mode (Smoother Transitions)
+```python
+from mlx_audio.tts.audio_utils import StreamingAudioProcessor
+
+# Generate with crossfading and smoothing
+processor = StreamingAudioProcessor(crossfade_ms=10.0)
+for chunk in generate_audio_streaming(text, ...):
+    processed_chunk = processor.process_chunk(chunk)
+total_audio = processor.get_concatenated_audio()
+```
+
+### Quality Comparison Tool
+
+Use the included comparison tool to evaluate audio quality across different generation methods:
+
+```bash
+# Generate all variants for comparison with consistent voice
+python simple_streaming_example.py
+
+# This will generate:
+# - consistent_normal_000.wav (baseline quality - traditional generation)
+# - consistent_clean_streaming.wav (streaming without processing)
+# - consistent_processed_streaming.wav (streaming with crossfading)
+# - consistent_callback_streaming.wav (callback-based streaming)
+```
+
+#### What the Comparison Tool Tests
+
+The `simple_streaming_example.py` script generates audio using the same voice (`af_heart`) and text across all methods to provide fair quality comparison:
+
+1. **Normal Generation**: Traditional non-streaming TTS (baseline quality)
+2. **Clean Streaming**: Raw chunk concatenation without processing (should match baseline)
+3. **Processed Streaming**: Crossfading and smoothing applied (smoother but potentially muffled)
+4. **Callback Streaming**: Event-driven streaming (useful for real-time applications)
+
+All tests use consistent parameters:
+- Model: `mlx-community/orpheus-3b-0.1-ft-4bit`
+- Voice: `af_heart` 
+- Chunk size: 35 tokens (~150ms audio)
+- Temperature: 0.6
+
+Listen to all generated files to understand the quality trade-offs for your specific use case.
+
+### Known Quality Considerations
+
+#### Audio Quality Comparison
+
+The streaming implementation provides acceptable quality with some trade-offs compared to traditional generation:
+
+1. **Clean Streaming (Unprocessed)**:
+   - ✅ **Quality**: Identical to normal generation
+   - ✅ **Clarity**: Full voice dynamics preserved
+   - ⚠️ **Artifacts**: May have rare audio clicks between chunks during concatenation
+   - 🎯 **Use Case**: Maximum quality applications where occasional clicks are acceptable
+
+2. **Processed Streaming (With Audio Processing)**:
+   - ✅ **Smoothness**: Eliminates clicks with crossfading
+   - ✅ **Continuity**: Seamless audio transitions
+   - ⚠️ **Quality**: Slightly muffled/softer voice due to crossfading and smoothing
+   - ⚠️ **Dynamics**: Reduced dynamic range from processing
+   - 🎯 **Use Case**: Real-time applications requiring smooth playback
+
+3. **Latency vs Quality Trade-offs**:
+   - Smaller chunk sizes (7-14 tokens) = Lower latency but more potential artifacts
+   - Larger chunk sizes (21-35 tokens) = Better quality but higher latency
+   - Ultra-low latency mode = ~0.25s first chunk but may affect initial quality
+
+4. **Model Compatibility**:
+   - Optimized for Orpheus models (`mlx-community/orpheus-3b-0.1-ft-4bit`)
+   - Other models may have different streaming behavior and quality characteristics
+   - Kokoro and other models may require different parameter tuning
+
+### Best Practices
+
+#### Quality Optimization
+1. **For Maximum Quality**: Use clean streaming without processing
+   ```python
+   # Simple concatenation preserves original quality
+   chunks = [chunk.astype(np.float32) for chunk in generate_audio_streaming(...)]
+   audio = np.concatenate(chunks)
+   ```
+
+2. **For Smooth Playback**: Use minimal crossfading (1-3ms) to reduce artifacts
+   ```python
+   processor = StreamingAudioProcessor(crossfade_ms=3.0)  # Minimal processing
+   ```
+
+3. **For Real-time Applications**: 
+   - Start with `streaming_chunk_tokens=35` (good balance)
+   - Reduce to 21 or 14 for lower latency if needed
+   - Use `ultra_low_latency=True` for conversational AI
+
+#### Performance Tuning
+4. **WebSocket Streaming**: Enable `ultra_low_latency=True` for responsive user experience
+5. **Memory Efficiency**: Use callback-based streaming for long texts
+6. **Network Streaming**: Consider chunk buffering to handle network jitter
+
+#### Testing and Development
+7. **Quality Testing**: Always compare with normal generation using same voice and text
+8. **Use Comparison Tool**: Run `python simple_streaming_example.py` to evaluate quality
+9. **Voice Consistency**: Use same voice across all tests for fair comparison
+10. **Parameter Experimentation**: Test different `streaming_chunk_tokens` values for your use case
+
+#### Production Considerations
+11. **Error Handling**: Implement proper error handling for network interruptions
+12. **Audio Buffering**: Buffer 2-3 chunks for smooth playback in real-time applications
+13. **Quality Monitoring**: Monitor for audio artifacts in production deployments
+14. **Model Selection**: Use Orpheus models for best streaming performance
+
+## Web Interface & API Server
 
 MLX-Audio includes a web interface with a 3D visualization that reacts to audio frequencies. The interface allows you to:
 
@@ -214,9 +466,14 @@ mx.save_safetensors("./8bit/kokoro-v1_0.safetensors", weights, metadata={"format
 - MLX
 - Python 3.8+
 - Apple Silicon Mac (for optimal performance)
+- For streaming functionality:
+  - soundfile (for audio I/O)
+  - numpy (for audio processing)
 - For the web interface and API:
   - FastAPI
   - Uvicorn
+- For WebSocket streaming:
+  - websockets
   
 ## License
 
@@ -225,5 +482,7 @@ mx.save_safetensors("./8bit/kokoro-v1_0.safetensors", weights, metadata={"format
 ## Acknowledgements
 
 - Thanks to the Apple MLX team for providing a great framework for building TTS and STS models.
-- This project uses the Kokoro model architecture for text-to-speech synthesis.
+- This project uses the Kokoro and Orpheus model architectures for text-to-speech synthesis.
 - The 3D visualization uses Three.js for rendering.
+- Streaming TTS implementation optimized for real-time applications and conversational AI.
+- Special thanks to the open-source community for feedback on audio quality and streaming performance.
