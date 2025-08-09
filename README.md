@@ -150,16 +150,45 @@ generate_audio_with_callback(
 MLX-Audio includes a WebSocket server for real-time streaming applications:
 
 ```bash
-# Start the streaming server
+# Start the streaming server with model preloading (recommended)
 python -m mlx_audio.orpheus_streaming_server --host 0.0.0.0 --port 8765
 
-# Or with custom settings
+# With custom model and settings
 python -m mlx_audio.orpheus_streaming_server \
     --host 127.0.0.1 \
     --port 8765 \
-    --model mlx-community/orpheus-3b-0.1-ft-4bit \
-    --chunk_tokens 35
+    --model mlx-community/orpheus-3b-0.1-ft-4bit
+
+# Disable model preloading (load on first request)
+python -m mlx_audio.orpheus_streaming_server \
+    --host 0.0.0.0 \
+    --port 8765 \
+    --no-preload
+
+# With verbose logging
+python -m mlx_audio.orpheus_streaming_server \
+    --host 0.0.0.0 \
+    --port 8765 \
+    --verbose
 ```
+
+#### Server Options
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--host` | Server host address | localhost |
+| `--port` | Server port | 8765 |
+| `--model` | Model path to preload | mlx-community/orpheus-3b-0.1-ft-4bit |
+| `--no-preload` | Disable model preloading | False (preload enabled) |
+| `--verbose` | Enable verbose logging | False |
+
+**Model Preloading Benefits:**
+- ⚡ Faster first response (~0.3s vs ~6s)
+- 🛡️ Prevents segmentation faults from concurrent model loading
+- 💾 Single model instance in memory for all clients
+- 🚀 Ready to serve immediately upon connection
+- 🎵 SNAC audio codec also preloaded (no download delay)
+- 🔄 Thread-safe model sharing across all client sessions
 
 #### WebSocket Client Example
 
@@ -167,12 +196,14 @@ python -m mlx_audio.orpheus_streaming_server \
 const ws = new WebSocket('ws://localhost:8765');
 
 ws.onopen = function() {
-    // Send text for streaming
+    // Send text for streaming with emotions
     ws.send(JSON.stringify({
-        text: "Hello, this is real-time streaming TTS!",
-        voice: "af_heart",
+        type: 'start_orpheus_stream',
+        text: "Hello! <chuckle> This is real-time streaming TTS with emotions. Amazing, right? <gasp>",
+        voice: "tara",
         temperature: 0.6,
-        chunk_tokens: 35
+        chunk_tokens: 35,
+        ultra_low_latency: true
     }));
 };
 
@@ -196,6 +227,36 @@ ws.onmessage = function(event) {
 | `temperature` | Generation randomness | 0.6 | Higher = more variation |
 | `output_chunk_duration_ms` | Target output chunk duration | 150ms | Controls buffering behavior |
 | `respect_source_boundaries` | Preserve model chunk boundaries | False | Reduces audio artifacts |
+
+### Available Voices
+
+| Voice | Gender | Description |
+|-------|--------|-------------|
+| `tara` | Female | Natural, warm voice (default) |
+| `leah` | Female | Clear, professional voice |
+| `jess` | Female | Friendly, energetic voice |
+| `leo` | Male | Deep, authoritative voice |
+| `dan` | Male | Casual, approachable voice |
+| `mia` | Female | Soft, expressive voice |
+| `zac` | Male | Young, dynamic voice |
+| `zoe` | Female | Bright, cheerful voice |
+
+### Emotion Tags
+
+Add emotional expressions to your text using these tags:
+
+| Emotion | Tag | Usage Example |
+|---------|-----|---------------|
+| Laugh | `<laugh>` | "That's hilarious! `<laugh>`" |
+| Chuckle | `<chuckle>` | "Well, `<chuckle>` that's interesting." |
+| Sigh | `<sigh>` | "I suppose so. `<sigh>`" |
+| Cough | `<cough>` | "Excuse me. `<cough>` As I was saying..." |
+| Sniffle | `<sniffle>` | "I'm a bit emotional. `<sniffle>`" |
+| Groan | `<groan>` | "Oh no, not again! `<groan>`" |
+| Yawn | `<yawn>` | "I'm getting tired. `<yawn>`" |
+| Gasp | `<gasp>` | "Wow! `<gasp>` That's amazing!" |
+
+**💡 Tip**: Place emotion tags where you want the expression to occur in the speech. The emotion will be rendered at that specific point in the audio.
 
 ### Audio Quality Modes
 

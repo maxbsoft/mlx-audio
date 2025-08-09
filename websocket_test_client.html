@@ -1,0 +1,655 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Orpheus Streaming TTS Test Client</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .status {
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 5px;
+            font-weight: bold;
+        }
+        .connected { background-color: #d4edda; color: #155724; }
+        .disconnected { background-color: #f8d7da; color: #721c24; }
+        .streaming { background-color: #d1ecf1; color: #0c5460; }
+        
+        textarea {
+            width: 100%;
+            height: 100px;
+            margin: 10px 0;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-family: inherit;
+        }
+        
+        button {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            margin: 5px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        
+        button:hover {
+            background-color: #0056b3;
+        }
+        
+        button:disabled {
+            background-color: #6c757d;
+            cursor: not-allowed;
+        }
+        
+        .logs {
+            background-color: #f8f9fa;
+            border: 1px solid #e9ecef;
+            border-radius: 5px;
+            padding: 10px;
+            height: 300px;
+            overflow-y: scroll;
+            font-family: monospace;
+            font-size: 12px;
+            margin-top: 20px;
+        }
+        
+        .log-entry {
+            margin: 2px 0;
+            padding: 2px 5px;
+        }
+        
+        .log-info { color: #0066cc; }
+        .log-error { color: #cc0000; background-color: #ffe6e6; }
+        .log-success { color: #006600; }
+        
+        .controls {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin: 20px 0;
+        }
+        
+        .stats {
+            background-color: #e9ecef;
+            padding: 10px;
+            border-radius: 5px;
+            margin: 10px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎵 Orpheus Streaming TTS Test Client</h1>
+        
+        <div id="status" class="status disconnected">
+            ❌ Disconnected
+        </div>
+        
+        <div class="controls">
+            <div>
+                <label for="serverUrl">WebSocket Server:</label>
+                <input type="text" id="serverUrl" value="ws://127.0.0.1:8765" style="width: 100%; padding: 5px;">
+            </div>
+            <div>
+                <label for="voice">Voice:</label>
+                <select id="voice" style="width: 100%; padding: 5px;">
+                    <option value="tara">Tara (Female)</option>
+                    <option value="leah">Leah (Female)</option>
+                    <option value="jess">Jess (Female)</option>
+                    <option value="leo">Leo (Male)</option>
+                    <option value="dan">Dan (Male)</option>
+                    <option value="mia">Mia (Female)</option>
+                    <option value="zac">Zac (Male)</option>
+                    <option value="zoe">Zoe (Female)</option>
+                </select>
+            </div>
+        </div>
+        
+        <!-- Advanced Settings -->
+        <details style="margin: 15px 0; border: 1px solid #ddd; border-radius: 5px; padding: 10px;">
+            <summary style="cursor: pointer; font-weight: bold; margin: -10px; padding: 10px; background: #f8f9fa;">
+                ⚙️ Advanced Streaming Settings
+            </summary>
+            
+            <div class="controls" style="margin-top: 15px;">
+                <div>
+                    <label for="chunkTokens">Chunk Size (tokens, multiple of 7):</label>
+                    <input type="number" id="chunkTokens" value="35" min="7" step="7" style="width: 100%; padding: 5px;">
+                    <small style="color: #666;">Larger chunks = better quality, higher latency</small>
+                </div>
+                <div>
+                    <label for="temperature">Temperature:</label>
+                    <input type="range" id="temperature" min="0.1" max="1.0" step="0.1" value="0.6" style="width: 100%;">
+                    <output id="temperatureValue">0.6</output>
+                    <small style="color: #666;">Higher = more creative, lower = more consistent</small>
+                </div>
+            </div>
+            
+            <div class="controls">
+                <div>
+                    <label for="topP">Top-p:</label>
+                    <input type="range" id="topP" min="0.1" max="1.0" step="0.05" value="0.8" style="width: 100%;">
+                    <output id="topPValue">0.8</output>
+                    <small style="color: #666;">Nucleus sampling parameter</small>
+                </div>
+                <div>
+                    <label for="maxTokens">Max Tokens:</label>
+                    <input type="number" id="maxTokens" value="1200" min="100" max="2000" step="50" style="width: 100%; padding: 5px;">
+                    <small style="color: #666;">Maximum generation length</small>
+                </div>
+            </div>
+            
+            <div class="controls">
+                <div>
+                    <label>
+                        <input type="checkbox" id="ultraLowLatency" checked>
+                        Ultra Low Latency Mode
+                    </label>
+                    <small style="color: #666; display: block;">~0.3s first chunk vs ~2.8s</small>
+                </div>
+                <div>
+                    <label>
+                        <input type="checkbox" id="enableProcessing">
+                        Enable Audio Processing
+                    </label>
+                    <small style="color: #666; display: block;">Crossfading, smoothing, DC removal</small>
+                </div>
+            </div>
+            
+            <div class="controls">
+                <div>
+                    <label>
+                        <input type="checkbox" id="verboseMode" checked>
+                        Verbose Logging
+                    </label>
+                    <small style="color: #666; display: block;">Show detailed generation info</small>
+                </div>
+                <div>
+                    <label for="repetitionPenalty">Repetition Penalty:</label>
+                    <input type="range" id="repetitionPenalty" min="1.0" max="2.0" step="0.1" value="1.3" style="width: 100%;">
+                    <output id="repetitionPenaltyValue">1.3</output>
+                </div>
+            </div>
+            
+            <!-- Quality Presets -->
+            <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid #ddd;">
+                <label style="font-weight: bold;">🎯 Quality Presets:</label>
+                <div style="display: flex; gap: 10px; margin-top: 10px; flex-wrap: wrap;">
+                    <button type="button" onclick="applyPreset('speed')" style="background: #28a745; font-size: 12px; padding: 5px 10px;">
+                        ⚡ Speed
+                    </button>
+                    <button type="button" onclick="applyPreset('balanced')" style="background: #17a2b8; font-size: 12px; padding: 5px 10px;">
+                        ⚖️ Balanced
+                    </button>
+                    <button type="button" onclick="applyPreset('quality')" style="background: #fd7e14; font-size: 12px; padding: 5px 10px;">
+                        🎵 Quality
+                    </button>
+                    <button type="button" onclick="applyPreset('creative')" style="background: #6f42c1; font-size: 12px; padding: 5px 10px;">
+                        🎨 Creative
+                    </button>
+                </div>
+                <small style="color: #666; display: block; margin-top: 5px;">
+                    Speed: Small chunks, no processing | Quality: Large chunks, processing | Creative: High temperature
+                </small>
+            </div>
+        </details>
+        
+        <label for="textInput">Text to generate:</label>
+        <textarea id="textInput" placeholder="Enter text to convert to speech...">Hello! <chuckle> This is a test of the Orpheus streaming TTS system. The audio should stream in real-time as chunks. Pretty amazing, right? <gasp></textarea>
+        
+        <!-- Emotion Tags -->
+        <div style="margin: 10px 0; padding: 10px; background: #f8f9fa; border-radius: 5px; border: 1px solid #e9ecef;">
+            <label style="font-weight: bold; display: block; margin-bottom: 8px;">🎭 Emotion Tags (click to insert):</label>
+            <div style="display: flex; flex-wrap: wrap; gap: 5px;">
+                <button type="button" onclick="insertEmotion('laugh')" style="background: #28a745; color: white; border: none; padding: 4px 8px; border-radius: 3px; font-size: 12px; cursor: pointer;">
+                    😂 &lt;laugh&gt;
+                </button>
+                <button type="button" onclick="insertEmotion('chuckle')" style="background: #28a745; color: white; border: none; padding: 4px 8px; border-radius: 3px; font-size: 12px; cursor: pointer;">
+                    😄 &lt;chuckle&gt;
+                </button>
+                <button type="button" onclick="insertEmotion('sigh')" style="background: #6c757d; color: white; border: none; padding: 4px 8px; border-radius: 3px; font-size: 12px; cursor: pointer;">
+                    😔 &lt;sigh&gt;
+                </button>
+                <button type="button" onclick="insertEmotion('cough')" style="background: #dc3545; color: white; border: none; padding: 4px 8px; border-radius: 3px; font-size: 12px; cursor: pointer;">
+                    😷 &lt;cough&gt;
+                </button>
+                <button type="button" onclick="insertEmotion('sniffle')" style="background: #17a2b8; color: white; border: none; padding: 4px 8px; border-radius: 3px; font-size: 12px; cursor: pointer;">
+                    🤧 &lt;sniffle&gt;
+                </button>
+                <button type="button" onclick="insertEmotion('groan')" style="background: #fd7e14; color: white; border: none; padding: 4px 8px; border-radius: 3px; font-size: 12px; cursor: pointer;">
+                    😩 &lt;groan&gt;
+                </button>
+                <button type="button" onclick="insertEmotion('yawn')" style="background: #6f42c1; color: white; border: none; padding: 4px 8px; border-radius: 3px; font-size: 12px; cursor: pointer;">
+                    🥱 &lt;yawn&gt;
+                </button>
+                <button type="button" onclick="insertEmotion('gasp')" style="background: #e83e8c; color: white; border: none; padding: 4px 8px; border-radius: 3px; font-size: 12px; cursor: pointer;">
+                    😲 &lt;gasp&gt;
+                </button>
+            </div>
+            <small style="color: #666; display: block; margin-top: 5px;">
+                💡 Tip: Place emotion tags where you want the expression to occur in speech. Example: "Hello &lt;chuckle&gt; this is funny!"
+            </small>
+        </div>
+        
+        <div style="text-align: center;">
+            <button id="connectBtn" onclick="connect()">🔗 Connect</button>
+            <button id="streamBtn" onclick="startStream()" disabled>🎵 Start Streaming</button>
+            <button id="stopBtn" onclick="stopStream()" disabled>⏹️ Stop</button>
+            <button id="clearBtn" onclick="clearLogs()">🗑️ Clear Logs</button>
+        </div>
+        
+        <div id="stats" class="stats" style="display: none;">
+            <strong>Streaming Stats:</strong><br>
+            Chunks received: <span id="chunkCount">0</span><br>
+            Total samples: <span id="totalSamples">0</span><br>
+            Audio duration: <span id="audioDuration">0.00</span>s<br>
+            Elapsed time: <span id="elapsedTime">0.00</span>s
+        </div>
+        
+        <div class="logs" id="logs">
+            <div class="log-entry log-info">Ready to connect...</div>
+        </div>
+    </div>
+
+    <script>
+        let ws = null;
+        let isConnected = false;
+        let isStreaming = false;
+        let audioContext = null;
+        let chunkCount = 0;
+        let totalSamples = 0;
+        let streamStartTime = 0;
+        let audioQueue = [];
+        let isPlaying = false;
+        let nextStartTime = 0;
+
+        // Initialize range input outputs
+        document.addEventListener('DOMContentLoaded', function() {
+            // Update range input displays
+            const ranges = [
+                { id: 'temperature', outputId: 'temperatureValue' },
+                { id: 'topP', outputId: 'topPValue' },
+                { id: 'repetitionPenalty', outputId: 'repetitionPenaltyValue' }
+            ];
+            
+            ranges.forEach(range => {
+                const input = document.getElementById(range.id);
+                const output = document.getElementById(range.outputId);
+                
+                input.addEventListener('input', function() {
+                    output.textContent = this.value;
+                });
+            });
+            
+            // Validate chunk tokens to be multiple of 7
+            document.getElementById('chunkTokens').addEventListener('input', function() {
+                let value = parseInt(this.value);
+                if (value % 7 !== 0) {
+                    value = Math.max(7, Math.round(value / 7) * 7);
+                    this.value = value;
+                    log(`⚠️ Chunk size adjusted to ${value} (must be multiple of 7)`, 'info');
+                }
+            });
+        });
+
+        function log(message, type = 'info') {
+            const logs = document.getElementById('logs');
+            const entry = document.createElement('div');
+            entry.className = `log-entry log-${type}`;
+            entry.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+            logs.appendChild(entry);
+            logs.scrollTop = logs.scrollHeight;
+        }
+
+        function updateStatus(message, connected = false, streaming = false) {
+            const status = document.getElementById('status');
+            status.textContent = message;
+            status.className = streaming ? 'status streaming' : 
+                              connected ? 'status connected' : 'status disconnected';
+            
+            document.getElementById('connectBtn').disabled = connected;
+            document.getElementById('streamBtn').disabled = !connected || streaming;
+            document.getElementById('stopBtn').disabled = !streaming;
+            
+            isConnected = connected;
+            isStreaming = streaming;
+        }
+
+        function updateStats() {
+            if (isStreaming && streamStartTime > 0) {
+                const elapsed = (Date.now() - streamStartTime) / 1000;
+                const audioDuration = totalSamples / 24000;
+                
+                document.getElementById('chunkCount').textContent = chunkCount;
+                document.getElementById('totalSamples').textContent = totalSamples.toLocaleString();
+                document.getElementById('audioDuration').textContent = audioDuration.toFixed(2);
+                document.getElementById('elapsedTime').textContent = elapsed.toFixed(2);
+                document.getElementById('stats').style.display = 'block';
+            }
+        }
+
+        async function initAudioContext() {
+            if (!audioContext) {
+                try {
+                    audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                    log('🎧 Audio context initialized', 'success');
+                } catch (e) {
+                    log(`❌ Failed to initialize audio context: ${e}`, 'error');
+                }
+            }
+            
+            // Resume audio context if suspended (required by some browsers)
+            if (audioContext.state === 'suspended') {
+                await audioContext.resume();
+                log('🎧 Audio context resumed', 'success');
+            }
+        }
+
+        async function connect() {
+            const serverUrl = document.getElementById('serverUrl').value;
+            log(`Connecting to ${serverUrl}...`);
+            
+            // Initialize audio context
+            await initAudioContext();
+            
+            try {
+                ws = new WebSocket(serverUrl);
+                
+                ws.onopen = function() {
+                    log('✅ Connected to server', 'success');
+                    updateStatus('🔗 Connected', true);
+                };
+                
+                ws.onmessage = function(event) {
+                    try {
+                        const data = JSON.parse(event.data);
+                        handleMessage(data);
+                    } catch (e) {
+                        log(`Error parsing message: ${e}`, 'error');
+                    }
+                };
+                
+                ws.onclose = function() {
+                    log('❌ Connection closed');
+                    updateStatus('❌ Disconnected');
+                    document.getElementById('stats').style.display = 'none';
+                };
+                
+                ws.onerror = function(error) {
+                    log(`Connection error: ${error}`, 'error');
+                    updateStatus('❌ Connection Error');
+                };
+                
+            } catch (error) {
+                log(`Failed to connect: ${error}`, 'error');
+                updateStatus('❌ Connection Failed');
+            }
+        }
+
+        function handleMessage(data) {
+            switch (data.type) {
+                case 'stream_started':
+                    log(`🎵 Stream started (Session: ${data.session_id})`, 'success');
+                    updateStatus('🎵 Streaming...', true, true);
+                    streamStartTime = Date.now();
+                    chunkCount = 0;
+                    totalSamples = 0;
+                    stopAudio(); // Reset audio timing for new stream
+                    break;
+                    
+                case 'audio_chunk':
+                    chunkCount++;
+                    totalSamples += data.shape[0];
+                    log(`🔊 Audio chunk ${data.chunk_index}: ${data.shape[0]} samples (${data.metadata.duration_ms.toFixed(1)}ms)`);
+                    updateStats();
+                    
+                    // Decode and play the audio
+                    try {
+                        const audioData = base64ToFloat32Array(data.audio);
+                        playAudioChunk(audioData, data.sample_rate);
+                    } catch (e) {
+                        log(`❌ Error playing audio chunk: ${e}`, 'error');
+                    }
+                    break;
+                    
+                case 'stream_complete':
+                    log(`✅ Stream completed: ${data.stats.total_chunks} chunks, ${data.stats.audio_duration.toFixed(2)}s audio`, 'success');
+                    updateStatus('🔗 Connected', true);
+                    updateStats();
+                    stopAudio();
+                    break;
+                    
+                case 'stream_stopped':
+                    log('⏹️ Stream stopped');
+                    updateStatus('🔗 Connected', true);
+                    stopAudio();
+                    break;
+                    
+                case 'error':
+                    log(`❌ Server error: ${data.message}`, 'error');
+                    updateStatus('🔗 Connected', true);
+                    break;
+                    
+                default:
+                    log(`📨 Unknown message type: ${data.type}`);
+            }
+        }
+
+        function startStream() {
+            if (!isConnected || isStreaming) return;
+            
+            const text = document.getElementById('textInput').value.trim();
+            if (!text) {
+                log('❌ Please enter text to generate', 'error');
+                return;
+            }
+            
+            // Gather all parameters
+            const voice = document.getElementById('voice').value;
+            const chunkTokens = parseInt(document.getElementById('chunkTokens').value);
+            const temperature = parseFloat(document.getElementById('temperature').value);
+            const topP = parseFloat(document.getElementById('topP').value);
+            const maxTokens = parseInt(document.getElementById('maxTokens').value);
+            const ultraLowLatency = document.getElementById('ultraLowLatency').checked;
+            const enableProcessing = document.getElementById('enableProcessing').checked;
+            const verbose = document.getElementById('verboseMode').checked;
+            const repetitionPenalty = parseFloat(document.getElementById('repetitionPenalty').value);
+            
+            // Validate chunk tokens
+            if (chunkTokens % 7 !== 0) {
+                log('❌ Chunk size must be a multiple of 7', 'error');
+                return;
+            }
+            
+            const message = {
+                type: 'start_orpheus_stream',
+                text: text,
+                voice: voice,
+                chunk_tokens: chunkTokens,
+                temperature: temperature,
+                top_p: topP,
+                max_tokens: maxTokens,
+                ultra_low_latency: ultraLowLatency,
+                enable_processing: enableProcessing,
+                verbose: verbose,
+                repetition_penalty: repetitionPenalty
+            };
+            
+            log(`🎯 Starting stream with settings:`);
+            log(`   📝 Text: "${text.substring(0, 50)}${text.length > 50 ? '...' : ''}"`);
+            log(`   🎤 Voice: ${voice}`);
+            log(`   📊 Chunks: ${chunkTokens} tokens`);
+            log(`   🌡️ Temperature: ${temperature}`);
+            log(`   🎯 Top-p: ${topP}`);
+            log(`   ⚡ Ultra Low Latency: ${ultraLowLatency ? 'ON' : 'OFF'}`);
+            log(`   🔧 Audio Processing: ${enableProcessing ? 'ON' : 'OFF'}`);
+            
+            ws.send(JSON.stringify(message));
+        }
+
+        function stopStream() {
+            if (!isConnected || !isStreaming) return;
+            
+            const message = { type: 'stop_stream' };
+            ws.send(JSON.stringify(message));
+            log('🛑 Stopping stream...');
+        }
+
+        function clearLogs() {
+            document.getElementById('logs').innerHTML = '<div class="log-entry log-info">Logs cleared...</div>';
+        }
+
+        // Audio decoding and playback functions
+        function base64ToFloat32Array(base64) {
+            const binaryString = window.atob(base64);
+            const bytes = new Uint8Array(binaryString.length);
+            for (let i = 0; i < binaryString.length; i++) {
+                bytes[i] = binaryString.charCodeAt(i);
+            }
+            // Convert bytes to Float32Array
+            const float32Array = new Float32Array(bytes.buffer);
+            return float32Array;
+        }
+
+        async function playAudioChunk(audioData, sampleRate = 24000) {
+            if (!audioContext) {
+                log('❌ Audio context not initialized', 'error');
+                return;
+            }
+
+            try {
+                // Create audio buffer
+                const audioBuffer = audioContext.createBuffer(1, audioData.length, sampleRate);
+                audioBuffer.copyToChannel(audioData, 0);
+
+                // Create buffer source
+                const source = audioContext.createBufferSource();
+                source.buffer = audioBuffer;
+                source.connect(audioContext.destination);
+
+                // Schedule playback for smooth streaming
+                const currentTime = audioContext.currentTime;
+                let startTime = Math.max(currentTime, nextStartTime);
+                
+                source.start(startTime);
+                nextStartTime = startTime + audioBuffer.duration;
+
+                log(`🎵 Playing audio chunk: ${audioData.length} samples, duration: ${audioBuffer.duration.toFixed(3)}s`);
+
+            } catch (e) {
+                log(`❌ Error playing audio: ${e}`, 'error');
+            }
+        }
+
+        function stopAudio() {
+            if (audioContext) {
+                // Reset timing for next stream
+                nextStartTime = 0;
+                log('🔇 Audio playback reset');
+            }
+        }
+
+        function applyPreset(presetName) {
+            const presets = {
+                speed: {
+                    chunkTokens: 14,  // Small chunks for speed
+                    temperature: 0.4,  // Low temperature for consistency
+                    topP: 0.7,
+                    maxTokens: 800,
+                    ultraLowLatency: true,
+                    enableProcessing: false,  // No processing for speed
+                    repetitionPenalty: 1.2
+                },
+                balanced: {
+                    chunkTokens: 35,  // Balanced chunk size
+                    temperature: 0.6,  // Balanced creativity
+                    topP: 0.8,
+                    maxTokens: 1200,
+                    ultraLowLatency: true,
+                    enableProcessing: false,  // Clean mode for better quality
+                    repetitionPenalty: 1.3
+                },
+                quality: {
+                    chunkTokens: 70,  // Large chunks for quality
+                    temperature: 0.5,  // Lower temp for quality
+                    topP: 0.85,
+                    maxTokens: 1500,
+                    ultraLowLatency: false,  // Allow more processing time
+                    enableProcessing: true,  // Enable processing for refinement
+                    repetitionPenalty: 1.4
+                },
+                creative: {
+                    chunkTokens: 35,
+                    temperature: 0.9,  // High temperature for creativity
+                    topP: 0.9,
+                    maxTokens: 1200,
+                    ultraLowLatency: true,
+                    enableProcessing: false,
+                    repetitionPenalty: 1.1  // Lower penalty for more variation
+                }
+            };
+
+            const preset = presets[presetName];
+            if (!preset) return;
+
+            // Apply preset values
+            document.getElementById('chunkTokens').value = preset.chunkTokens;
+            document.getElementById('temperature').value = preset.temperature;
+            document.getElementById('temperatureValue').textContent = preset.temperature;
+            document.getElementById('topP').value = preset.topP;
+            document.getElementById('topPValue').textContent = preset.topP;
+            document.getElementById('maxTokens').value = preset.maxTokens;
+            document.getElementById('ultraLowLatency').checked = preset.ultraLowLatency;
+            document.getElementById('enableProcessing').checked = preset.enableProcessing;
+            document.getElementById('repetitionPenalty').value = preset.repetitionPenalty;
+            document.getElementById('repetitionPenaltyValue').textContent = preset.repetitionPenalty;
+
+            log(`🎯 Applied ${presetName} preset`, 'success');
+        }
+
+        function insertEmotion(emotion) {
+            const textarea = document.getElementById('textInput');
+            const emotionTag = `<${emotion}>`;
+            
+            // Get cursor position
+            const startPos = textarea.selectionStart;
+            const endPos = textarea.selectionEnd;
+            
+            // Insert emotion tag at cursor position
+            const textBefore = textarea.value.substring(0, startPos);
+            const textAfter = textarea.value.substring(endPos, textarea.value.length);
+            
+            // Add space before emotion tag if needed
+            const spaceBefore = (startPos > 0 && textBefore[startPos - 1] !== ' ') ? ' ' : '';
+            // Add space after emotion tag if needed  
+            const spaceAfter = (textAfter.length > 0 && textAfter[0] !== ' ') ? ' ' : '';
+            
+            textarea.value = textBefore + spaceBefore + emotionTag + spaceAfter + textAfter;
+            
+            // Move cursor to after the inserted tag
+            const newPos = startPos + spaceBefore.length + emotionTag.length + spaceAfter.length;
+            textarea.setSelectionRange(newPos, newPos);
+            textarea.focus();
+            
+            log(`🎭 Inserted emotion: ${emotionTag}`, 'success');
+        }
+    </script>
+</body>
+</html>
