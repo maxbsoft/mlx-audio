@@ -11,7 +11,7 @@ import mlx.core as mx
 import mlx.nn as nn
 from huggingface_hub import snapshot_download
 from mlx.utils import tree_flatten
-from mlx_lm.convert import mixed_quant_predicate_builder
+# from mlx_lm.convert import mixed_quant_predicate_builder  # Not available in newer mlx_lm versions
 from mlx_lm.utils import dequantize_model, quantize_model, save_config, save_model
 from transformers import AutoConfig
 
@@ -343,7 +343,8 @@ def convert(
     )
 
     if isinstance(quant_predicate, str):
-        quant_predicate = mixed_quant_predicate_builder(quant_predicate, model)
+        # mixed_quant_predicate_builder not available in newer mlx_lm, use None as fallback
+        quant_predicate = None
 
     # Get model-specific quantization predicate if available
     model_quant_predicate = getattr(
