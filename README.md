@@ -96,7 +96,7 @@ MLX-Audio supports real-time streaming TTS for applications requiring low-latenc
 
 ### Streaming Features
 
-- **Ultra-low latency**: First audio chunk in ~0.25s vs ~6s for traditional generation
+- **Lower perceived latency**: First audible audio often within ~0.5–1.5s on a warmed server (Apple Silicon); varies with model, text, and settings
 - **Real-time processing**: Audio streams as chunks without waiting for complete generation
 - **Memory efficient**: No accumulation of large audio buffers
 - **WebSocket support**: Perfect for real-time web applications
@@ -223,7 +223,7 @@ Protocol details:
 - Control/status messages are JSON text frames.
 
 **Model Preloading Benefits:**
-- ⚡ Faster first response (~0.3s vs ~6s)
+- ⚡ Faster first response compared to on‑demand loading (often sub‑second after warmup; depends on hardware/model)
 - 🛡️ Prevents segmentation faults from concurrent model loading
 - 💾 Single model instance in memory for all clients
 - 🚀 Ready to serve immediately upon connection
@@ -265,7 +265,7 @@ ws.onmessage = function(event) {
 | Parameter | Description | Default | Impact |
 |-----------|-------------|---------|---------|
 | `streaming_chunk_tokens` | Tokens per chunk (must be multiple of 7) | 21 | Smaller = lower latency, more chunks |
-| `ultra_low_latency` | Aggressive first chunk generation | True | Reduces first chunk time to ~0.25s |
+| `ultra_low_latency` | Aggressive first chunk generation | True | Prioritizes faster first chunk; actual improvement depends on hardware/model |
 | `temperature` | Generation randomness | 0.6 | Higher = more variation |
 | `output_chunk_duration_ms` | Target output chunk duration | 150ms | Controls buffering behavior |
 | `respect_source_boundaries` | Preserve model chunk boundaries | False | Reduces audio artifacts |
@@ -375,7 +375,7 @@ The streaming implementation provides acceptable quality with some trade-offs co
 3. **Latency vs Quality Trade-offs**:
    - Smaller chunk sizes (7-14 tokens) = Lower latency but more potential artifacts
    - Larger chunk sizes (21-35 tokens) = Better quality but higher latency
-   - Ultra-low latency mode = ~0.25s first chunk but may affect initial quality
+   - Ultra-low latency mode prioritizes early audio; can reduce initial delay but may affect initial quality
 
 4. **Model Compatibility**:
    - Optimized for Orpheus models (`mlx-community/orpheus-3b-0.1-ft-4bit`)
