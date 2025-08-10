@@ -172,6 +172,42 @@ python -m mlx_audio.orpheus_streaming_server \
     --verbose
 ```
 
+##### Quick local setup (server + browser client)
+
+```bash
+# 1) Start the server (local only)
+python -m mlx_audio.orpheus_streaming_server --host 127.0.0.1 --port 8765 --verbose
+
+# 2) In another terminal, serve the repo root for the browser client (AudioWorklet requires HTTP)
+python3 -m http.server 8000
+
+# 3) Open in your browser
+# http://127.0.0.1:8000/websocket_test_client.html
+```
+
+#### Run the included browser client
+
+The repository contains a minimal browser client that plays the stream via an AudioWorklet and expects binary PCM frames.
+
+1) From the repository root, start a static HTTP server (required for AudioWorklet):
+
+```bash
+python3 -m http.server 8000
+```
+
+2) Open the client in your browser:
+
+```
+http://127.0.0.1:8000/websocket_test_client.html
+```
+
+3) Click “Connect”, then “Start”. Adjust “Playback Buffer (sec)” if you observe underflows; 0.15–0.25 is a good starting point.
+
+Notes:
+- AudioWorklets cannot be loaded from file:// URLs; serving over HTTP/HTTPS is required.
+- The WebSocket server streams binary Float32 PCM frames (24 kHz, mono) with a small header: `b'PCM0' | u32 sample_rate | u32 num_samples | u32 num_channels | payload`.
+- Control messages (`stream_started`, `stream_complete`, errors) are JSON.
+
 #### Server Options
 
 | Option | Description | Default |
@@ -182,6 +218,10 @@ python -m mlx_audio.orpheus_streaming_server \
 | `--no-preload` | Disable model preloading | False (preload enabled) |
 | `--verbose` | Enable verbose logging | False |
 
+Protocol details:
+- Audio is sent as binary PCM frames (Float32, 24 kHz, mono) with a `PCM0` header. Clients should treat non‑text WebSocket messages as audio frames and parse the header before reading the Float32 payload.
+- Control/status messages are JSON text frames.
+
 **Model Preloading Benefits:**
 - ⚡ Faster first response (~0.3s vs ~6s)
 - 🛡️ Prevents segmentation faults from concurrent model loading
@@ -191,6 +231,8 @@ python -m mlx_audio.orpheus_streaming_server \
 - 🔄 Thread-safe model sharing across all client sessions
 
 #### WebSocket Client Example
+
+Note: The server currently uses binary PCM frames. The legacy example below demonstrates a base64 text protocol and is kept for reference; for browsers, prefer the included `websocket_test_client.html` which handles binary frames and AudioWorklet playback.
 
 ```javascript
 const ws = new WebSocket('ws://localhost:8765');

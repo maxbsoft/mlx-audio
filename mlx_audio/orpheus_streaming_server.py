@@ -7,6 +7,7 @@ import websockets
 import json
 import numpy as np
 import base64
+import struct
 import time
 import threading
 from typing import Dict, Any, Optional
@@ -142,7 +143,10 @@ class OrpheusStreamingServer:
         
         model_path = data.get('model_path', self.model_path)
         voice = data.get('voice', 'tara')
-        chunk_tokens = data.get('chunk_tokens', 21)
+        chunk_tokens = data.get('chunk_tokens', 56)  # Updated default to match new implementation
+        overlap_groups = data.get('overlap_groups', 0)  # Updated default: 0 = full context (best quality, ~0.7ms overhead)
+        lookahead_depth = data.get('lookahead_depth', 0)  # Number of tokens to look ahead for overlap-save
+        crossfade_samples = data.get('crossfade_samples', 0)  # Crossfade samples (0 = disabled, 480 = ~20ms at 24kHz)
         temperature = data.get('temperature', 0.6)
         top_p = data.get('top_p', 0.8)
         max_tokens = data.get('max_tokens', 1200)
@@ -156,9 +160,11 @@ class OrpheusStreamingServer:
         # Stop any existing session
         await self.stop_streaming(websocket, client_id)
         
-        # Create session tracking
+        # Create session tracking with unique uid to avoid race with previous session cleanup
         stop_event = threading.Event()
+        session_uid = time.time_ns()
         session = {
+            'uid': session_uid,
             'stop_event': stop_event,
             'start_time': time.time(),
             'chunk_count': 0,
@@ -174,6 +180,9 @@ class OrpheusStreamingServer:
                 'model_path': model_path,
                 'voice': voice,
                 'chunk_tokens': chunk_tokens,
+                'overlap_groups': overlap_groups,
+                'lookahead_depth': lookahead_depth,
+                'crossfade_samples': crossfade_samples,
                 'temperature': temperature,
                 'top_p': top_p,
                 'max_tokens': max_tokens,
@@ -184,7 +193,7 @@ class OrpheusStreamingServer:
         }))
         
         # Start streaming in background thread
-        def streaming_worker():
+        def streaming_worker(uid: int):
             """Background worker for audio generation"""
             try:
                 # Import with proper path handling
@@ -209,6 +218,22 @@ class OrpheusStreamingServer:
                     logger.info(f"Using pre-loaded model for client {client_id}")
                 else:
                     logger.info(f"Model not pre-loaded, will load on-demand for client {client_id}")
+
+                # Warm up SNAC decoder in THIS thread to avoid first-chunk cold start
+                try:
+                    from mlx_audio.tts.ultra_low_latency_streaming import CachedDecoder
+                except ImportError:
+                    from tts.ultra_low_latency_streaming import CachedDecoder
+                try:
+                    warmup_decoder = CachedDecoder(max_cache_size=1)
+                    # Warm up with the actual chunk size (aligned to 7) to compile correct shapes
+                    warmup_len = chunk_tokens if (chunk_tokens % 7 == 0) else ((chunk_tokens // 7) + 1) * 7
+                    if warmup_len < 7:
+                        warmup_len = 7
+                    _ = warmup_decoder.decode_tokens([128266] * warmup_len)
+                    logger.info(f"SNAC warmup completed in streaming thread (len={warmup_len})")
+                except Exception as warm_err:
+                    logger.warning(f"SNAC warmup failed (safe to ignore): {warm_err}")
                 
                 # Use pre-loaded model if available, otherwise use model_path
                 streaming_kwargs = {
@@ -217,10 +242,16 @@ class OrpheusStreamingServer:
                     'temperature': temperature,
                     'top_p': top_p,
                     'max_tokens': max_tokens,
-                    'streaming_chunk_tokens': chunk_tokens,
+                    'chunk_tokens': chunk_tokens,
+                    'overlap_groups': overlap_groups,
+                    'lookahead_depth': lookahead_depth,  # Number of tokens to look ahead for overlap-save
+                    'crossfade_samples': crossfade_samples,  # Crossfade samples (0 = disabled, 480 = ~20ms at 24kHz)
                     'ultra_low_latency': ultra_low_latency,
                     'verbose': verbose,
-                    'repetition_penalty': repetition_penalty
+                    'repetition_penalty': repetition_penalty,
+                    'discontinuity_threshold': 0.05 if enable_processing else 0.0,  # Discontinuity detection if processing enabled
+                    # 'debug_save_wav': verbose,  # Enable debug WAV saving if verbose
+                    # 'debug_wav_path': f"debug_{client_id}.wav"  # Unique file per session
                 }
                 
                 if model is not None:
@@ -260,12 +291,14 @@ class OrpheusStreamingServer:
                     self.main_loop
                 )
             finally:
-                # Clean up session
-                if str(client_id) in self.active_sessions:
-                    del self.active_sessions[str(client_id)]
+                # Clean up session only if it's still the same uid (avoid deleting a newer session)
+                key = str(client_id)
+                current = self.active_sessions.get(key)
+                if current and current.get('uid') == uid:
+                    del self.active_sessions[key]
         
         # Start worker thread
-        thread = threading.Thread(target=streaming_worker, daemon=True)
+        thread = threading.Thread(target=streaming_worker, args=(session_uid,), daemon=True)
         thread.start()
     
     async def stop_streaming(self, websocket, client_id: int):
@@ -284,33 +317,44 @@ class OrpheusStreamingServer:
             logger.info(f"Stopped streaming for client {client_id}")
     
     async def send_audio_chunk(self, websocket, client_id: int, audio_chunk: np.ndarray):
-        """Send audio chunk to client"""
-        
+        """Send audio chunk to client as binary PCM frame.
+
+        Frame format (little-endian):
+        - 4 bytes: magic b'PCM0'
+        - u32: sample_rate (24000)
+        - u32: num_samples
+        - u32: num_channels (1)
+        - payload: float32 PCM interleaved (mono)
+        """
+
         try:
-            # Convert audio to base64
-            audio_bytes = audio_chunk.astype(np.float32).tobytes()
-            audio_b64 = base64.b64encode(audio_bytes).decode('utf-8')
-            
-            session = self.active_sessions.get(str(client_id), {})
-            
-            message = {
-                'type': 'audio_chunk',
-                'session_id': str(client_id),
-                'audio': audio_b64,
-                'sample_rate': 24000,
-                'dtype': 'float32',
-                'shape': list(audio_chunk.shape),
-                'chunk_index': session.get('chunk_count', 0),
-                'timestamp': time.time(),
-                'metadata': {
-                    'duration_ms': len(audio_chunk) / 24000 * 1000,
-                    'total_samples': session.get('total_samples', 0) + len(audio_chunk),
-                    'elapsed_time': time.time() - session.get('start_time', time.time())
-                }
-            }
-            
-            await websocket.send(json.dumps(message))
-            
+            # Ensure float32 mono PCM
+            audio_float32 = np.asarray(audio_chunk, dtype=np.float32).reshape(-1)
+
+            if len(audio_float32) > 0:
+                audio_min = float(np.min(audio_float32))
+                audio_max = float(np.max(audio_float32))
+                audio_mean = float(np.mean(audio_float32))
+                logger.debug(
+                    f"🔊 Audio stats: min={audio_min:.6f}, max={audio_max:.6f}, mean={audio_mean:.6f}, samples={len(audio_float32)}"
+                )
+                if audio_max > 10 or audio_min < -10:
+                    logger.warning(
+                        f"⚠️ Unusual audio range detected: {audio_min} to {audio_max} (expected: -1 to 1)"
+                    )
+
+            payload = audio_float32.tobytes(order='C')
+            header = struct.pack(
+                '<4sIII',
+                b'PCM0',         # magic
+                24000,           # sample rate
+                len(audio_float32),  # num samples
+                1                # num channels (mono)
+            )
+
+            frame = header + payload
+            await websocket.send(frame)
+
         except Exception as e:
             logger.error(f"Error sending audio chunk to client {client_id}: {e}")
     

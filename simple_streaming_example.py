@@ -12,8 +12,14 @@ import numpy as np
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'mlx_audio'))
 
 # Use consistent voice across all tests
-CONSISTENT_VOICE = "af_heart"
+CONSISTENT_VOICE = "tera"
 TEST_TEXT = "Hello, this is a consistent voice test to compare audio quality between normal and streaming generation methods."
+
+OVERLAP_GROUPS = 0 # If 0, use all previous context for overlap-save
+STREAMING_CHUNK_TOKENS = 10 * 7 # Must be multiple of 7
+LOOKAHEAD_DEPTH = 1 # Number of tokens to look ahead for overlap-save
+CROSSFADE_SAMPLES = 240 # Number of samples to crossfade between chunks
+
 
 def generate_normal_audio():
     """Generate normal audio with consistent voice"""
@@ -39,84 +45,6 @@ def generate_normal_audio():
     return True
 
 
-def generate_clean_streaming_audio():
-    """Generate streaming audio without processing (clean)"""
-    
-    print("\n🎯 Generating clean streaming audio...")
-    
-    try:
-        from tts.generate import generate_audio_streaming
-        
-        chunks = []
-        start_time = time.time()
-        
-        for i, audio_chunk in enumerate(generate_audio_streaming(
-            text=TEST_TEXT,
-            model_path="mlx-community/orpheus-3b-0.1-ft-4bit",
-            voice=CONSISTENT_VOICE,
-            streaming_chunk_tokens=35,
-            temperature=0.6,
-            verbose=False
-        )):
-            # NO PROCESSING - just store raw chunks
-            chunks.append(audio_chunk.astype(np.float32))
-        
-        # SIMPLE CONCATENATION - no crossfading, no processing
-        if chunks:
-            total_audio = np.concatenate(chunks)
-        else:
-            total_audio = np.array([])
-        
-        # Save clean streaming result
-        import soundfile as sf
-        sf.write("consistent_clean_streaming.wav", total_audio, 24000)
-        print("✅ Clean streaming saved as: consistent_clean_streaming.wav")
-        
-    except Exception as e:
-        print(f"❌ Clean streaming failed: {e}")
-        return False
-    
-    return True
-
-
-def generate_processed_streaming_audio():
-    """Generate streaming audio with processing (crossfading, etc.)"""
-    
-    print("\n🎯 Generating processed streaming audio...")
-    
-    try:
-        from tts.generate import generate_audio_streaming
-        from tts.audio_utils import StreamingAudioProcessor
-        
-        chunks = []
-        audio_processor = StreamingAudioProcessor(crossfade_ms=10.0)
-        
-        for i, audio_chunk in enumerate(generate_audio_streaming(
-            text=TEST_TEXT,
-            model_path="mlx-community/orpheus-3b-0.1-ft-4bit",
-            voice=CONSISTENT_VOICE,
-            streaming_chunk_tokens=35,
-            temperature=0.6,
-            verbose=False
-        )):
-            # Process chunk with smooth transitions
-            processed_chunk = audio_processor.process_chunk(audio_chunk)
-            chunks.append(processed_chunk)
-        
-        # Get crossfaded audio
-        total_audio = audio_processor.get_concatenated_audio() if chunks else np.array([])
-        
-        # Save processed streaming result
-        import soundfile as sf
-        sf.write("consistent_processed_streaming.wav", total_audio, 24000)
-        print("✅ Processed streaming saved as: consistent_processed_streaming.wav")
-        
-    except Exception as e:
-        print(f"❌ Processed streaming failed: {e}")
-        return False
-    
-    return True
-
 
 def generate_callback_streaming_audio():
     """Generate streaming audio using callback method"""
@@ -137,10 +65,11 @@ def generate_callback_streaming_audio():
             callback=audio_callback,
             model_path="mlx-community/orpheus-3b-0.1-ft-4bit",
             voice=CONSISTENT_VOICE,
-            streaming_chunk_tokens=35,
+            chunk_tokens=STREAMING_CHUNK_TOKENS,
+            lookahead_depth=LOOKAHEAD_DEPTH,
+            overlap_groups=OVERLAP_GROUPS,
+            crossfade_samples=CROSSFADE_SAMPLES,
             temperature=0.6,
-            output_chunk_duration_ms=150,
-            ultra_low_latency=True
         )
         
         # Simple concatenation without processing
@@ -174,8 +103,8 @@ def main():
     
     # Generate all variants
     results.append(("Normal Generation", generate_normal_audio()))
-    results.append(("Clean Streaming", generate_clean_streaming_audio()))
-    results.append(("Processed Streaming", generate_processed_streaming_audio()))
+    # results.append(("Clean Streaming", generate_clean_streaming_audio()))
+    # results.append(("Processed Streaming", generate_processed_streaming_audio()))
     results.append(("Callback Streaming", generate_callback_streaming_audio()))
     
     # Summary

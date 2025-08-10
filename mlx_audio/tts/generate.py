@@ -364,8 +364,10 @@ def generate_audio_streaming(
     temperature: float = 0.6,
     top_p: float = 0.8,
     max_tokens: int = 1200,
-    streaming_chunk_tokens: int = 21,  # 3 audio frames
-    ultra_low_latency: bool = True,  # Enable ultra-low latency (~0.27s vs ~2.8s)
+    chunk_tokens: Optional[int] = 70,  # Tokens per chunk (must be multiple of 7)
+    overlap_groups: int = 0,  # Number of groups (7 tokens each) to use as left context (0 = full context, best quality)
+    lookahead_depth: int = 0,  # Number of tokens to look ahead for overlap-save (0 = immediate output)
+    crossfade_samples: int = 0,  # Crossfade samples (0 = disabled, 480 = ~20ms at 24kHz)
     verbose: bool = True,
     ref_audio: Optional[str] = None,
     ref_text: Optional[str] = None,
@@ -382,8 +384,10 @@ def generate_audio_streaming(
         temperature: Generation temperature
         top_p: Top-p sampling parameter
         max_tokens: Maximum tokens to generate
-        streaming_chunk_tokens: Tokens per chunk (must be multiple of 7)
-        ultra_low_latency: Use ultra-low latency mode (~0.27s vs ~2.8s first chunk)
+        chunk_tokens: Tokens per chunk (must be multiple of 7)
+        overlap_groups: Number of groups (7 tokens each) to use as left context (0 = full context, best quality)
+        lookahead_depth: Number of tokens to look ahead for overlap-save (0 = immediate output)
+        crossfade_samples: Number of samples to crossfade between chunks (0 = disabled, 480 = ~20ms at 24kHz)
         verbose: Print progress information
         ref_audio: Path to reference audio for voice cloning
         ref_text: Text for reference audio
@@ -394,6 +398,13 @@ def generate_audio_streaming(
     """
     
     try:
+        # Handle parameter compatibility
+        if chunk_tokens is not None:
+            effective_chunk_tokens = chunk_tokens
+        else:
+            effective_chunk_tokens = 70  # Default value
+        
+        
         # Check if model is Orpheus-compatible
         if "orpheus" not in model_path.lower() and "llama" not in model_path.lower():
             print(f"Warning: Model {model_path} may not support streaming. "
@@ -435,50 +446,39 @@ def generate_audio_streaming(
             print(f"\n🎵 Orpheus Streaming TTS")
             print(f"📝 Text: {text}")
             print(f"🎤 Voice: {voice}")
-            print(f"📊 Chunk size: {streaming_chunk_tokens} tokens")
+            print(f"📊 Chunk size: {effective_chunk_tokens} tokens")
+            print(f"🔄 Overlap groups: {overlap_groups} {'(full context)' if overlap_groups == 0 else '(limited overlap)'}")
+            print(f"👀 Lookahead depth: {lookahead_depth}")
+            print(f"🔀 Crossfade samples: {crossfade_samples}")
             print(f"🌡️  Temperature: {temperature}")
             print(f"🎯 Model: {model_path}")
         
         # Choose streaming approach based on latency requirements
-        if ultra_low_latency:
-            if verbose:
-                print("🚀 Using ultra-low latency mode (~0.27s first chunk)")
-            from .ultra_low_latency_streaming import generate_ultra_low_latency_streaming
-            
-            for audio_chunk in generate_ultra_low_latency_streaming(
-                model=model,
-                text=text,
-                voice=voice,
-                temperature=temperature,
-                top_p=top_p,
-                max_tokens=max_tokens,
-                min_tokens_for_first_chunk=7,  # Aggressive first chunk
-                subsequent_chunk_tokens=streaming_chunk_tokens,
-                verbose=verbose,
-                ref_audio=ref_audio_mx,
-                ref_text=ref_text,
-                **kwargs
-            ):
-                yield audio_chunk
-        else:
-            if verbose:
-                print("📊 Using standard streaming mode (~2.8s first chunk)")
-            from .orpheus_streaming import generate_audio_streaming_simple
-            
-            for audio_chunk in generate_audio_streaming_simple(
-                model=model,
-                text=text,
-                voice=voice,
-                temperature=temperature,
-                top_p=top_p,
-                max_tokens=max_tokens,
-                streaming_chunk_tokens=streaming_chunk_tokens,
-                verbose=verbose,
-                ref_audio=ref_audio_mx,
-                ref_text=ref_text,
-                **kwargs
-            ):
-                yield audio_chunk
+       
+        if verbose:
+            print("🚀 Using ultra-low latency mode (~0.27s first chunk)")
+        from .ultra_low_latency_streaming import generate_ultra_low_latency_streaming
+        
+        for audio_chunk in generate_ultra_low_latency_streaming(
+            model=model,
+            text=text,
+            voice=voice,
+            temperature=temperature,
+            top_p=top_p,
+            max_tokens=max_tokens,
+            lookahead_depth=lookahead_depth,
+            chunk_tokens=effective_chunk_tokens,
+            overlap_groups=overlap_groups,
+            crossfade_samples=crossfade_samples,
+            verbose=verbose,
+            ref_audio=ref_audio_mx,
+            ref_text=ref_text,
+            debug_save_wav=kwargs.get("debug_save_wav", True),  # Pass debug parameters
+            debug_wav_path=kwargs.get("debug_wav_path", "debug_ultra_low_latency.wav"),
+            **kwargs
+        ):
+            yield audio_chunk
+    
                 
     except Exception as e:
         print(f"❌ Streaming error: {e}")
